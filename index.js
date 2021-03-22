@@ -5,35 +5,50 @@ app.use(express.json());            //Adding middleware to the pipeline
 
 //Stored people
 const people = [];
-//Object for validation in POST
+//Object for validation in POST and PUT
 const schema = Joi.object({
-    firstName: Joi.string().required(),
-    lastName: Joi.string().required(),
+    firstName: Joi.string().regex(/^[A-Za-z]*$/).messages({'string.pattern.base': `firstName must only be letters.`}).required(),
+    lastName: Joi.string().regex(/^[A-Za-z]*$/).messages({'string.pattern.base': `lastName must only be letters.`}).required(),
     dateOfBirth: Joi.date().required(),
     emailAddress: Joi.string().email().required(),
-    socialSecurityNumber: Joi.number().integer().positive().required()
+    socialSecurityNumber: Joi.string().regex(/^[0-9]{9}$/).messages({'string.pattern.base': `socialSecurityNumber must be a number and have 9 digits.`}).required()
 });
 
+//Function for validating people
+function validatePerson(person)
+{
+    return schema.validate(person);
+}
+
 /*      ENDPOINTS       */
+
+//Endpoint for Bad JSON formatting from client
+app.use((err, req, res, next) => {
+    if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+        console.log("User has provided invalid JSON");
+        return res.status(400).send("Error 400: Invalid JSON format sent"); // Bad request
+    }
+    next();
+});
 
 //GET to return all person objects
 app.get('/person', (req, res) =>
 {
-    //Return message if no people have been added
-    if(people.length < 1) res.send("No people have been added to the app");
+    //Return message if no people have been added (404)
+    if(people.length < 1) return res.status(404).send("Error 404: No people have been added to the app");
     //Else, send the list of people
-    else res.send(people);
+    res.status(200).send(people);
 });
 
 //GET person based on social security number
 //If person does not exist, return 404 for missing object
 app.get('/person/:socialSecurityNumber', (req, res) => {
-    const person = people.find(c => c.socialSecurityNumber === parseInt(req.params.socialSecurityNumber));
+    const person = people.find(c => c.socialSecurityNumber === req.params.socialSecurityNumber);
 
     //If the person isn't found, return HTTP status code
-    if(!person) res.status(404).send('404: The person with the provided SSN could not be found');
+    if(!person) return res.status(404).send('Error 404: The person with the provided SSN could not be found');
     //Otherwise, return person
-    else res.send(person);
+    res.status(200).send(person);
 });
 
 //POST person and return that person as JSON in the response
@@ -41,20 +56,82 @@ app.get('/person/:socialSecurityNumber', (req, res) => {
 //restrict duplicates
 app.post('/person', (req,res)=>
 {  
-    const validationResult = schema.validate(req.body);
+    try
+    {
+        //Input validation
+        const { error } = validatePerson(req.body);     
 
-    //Input validation
-    if(validationResult.error){
-        res.status(400).send(validationResult.error.details[0].message);
-        return;
+        if(error) return res.status(400).send(error.details[0].message);
+
+        //Check for duplicates
+        var duplicate = false;
+        for(var i = 0; i < people.length; i++) {
+            if (people[i].socialSecurityNumber === req.body.socialSecurityNumber) {
+                duplicate = true;
+                break;
+            }
+        }
+        if(duplicate) return res.status(400).send('Error 400: A person with the given SSN is already registered');
+    
+        //Create new object
+        const person = {
+            firstName: req.body.firstName,
+            lastName: req.body.lastName,
+            dateOfBirth: req.body.dateOfBirth,
+            emailAddress: req.body.emailAddress,
+            socialSecurityNumber: req.body.socialSecurityNumber,
+        };
+        people.push(person);
+
+        //Conventional response to show success: return the object made in the body and the status code (201 for POST)
+        res.status(201).send(person);
     }
+    catch(err){ res.status(500).send("Error 500: Unknown server-side error"); }
+});
 
-    //Create new object
-    const person = req.body;
-    people.push(person);
+app.put('/person/:socialSecurityNumber', (req, res) =>
+{
+    try
+    {
+        // Look up person with given ID
+        // If not existing, return 404 resource not found status code
+        const person = people.find(c => c.socialSecurityNumber === req.params.socialSecurityNumber);
+        if(!person) {res.status(404).send('Error 404: The person with the provided SSN could not be found'); return;}
 
-    //Conventional response to show success: return the object made in the body and the status code (201 for POST)
-    res.status(201).send(person);
+        // Validate the update request
+        // If invalid, return 400 bad request
+        //const validationResult = validateperson(req.body);
+        const { error } = validatePerson(req.body);
+        if(error) return res.status(400).send(error.details[0].message);
+
+        //Don't allow socialSecurityNumber to be updated
+        if(req.body.socialSecurityNumber !== person.socialSecurityNumber) return res.status(400).send("Error 400: Cannot update SSN");
+
+        // Update person
+        person.firstName= req.body.firstName,
+        person.lastName= req.body.lastName,
+        person.dateOfBirth= req.body.dateOfBirth,
+        person.emailAddress= req.body.emailAddress,
+        person.socialSecurityNumber= req.body.socialSecurityNumber,
+
+        // Return the updated person
+        res.status(200).send(person);
+    }
+    catch(err){res.status(500).send("Error 500: Unknown server-side error");}   
+});
+
+app.delete('/person/:socialSecurityNumber', (req, res) =>
+{
+    //Look up the person with given ID
+    // If not existing, return 404 resource not found status code
+    const person = people.find(c => c.socialSecurityNumber === req.params.socialSecurityNumber);
+    if(!person) return res.status(404).send('ERROR 404: The person with the given SSN was not found'); 
+
+    //Delete
+    const index = people.indexOf(person);
+    people.splice(index, 1);   //Remove the person
+    //Return the person
+    res.status(200).send(person);
 });
 
 /*                      */
@@ -63,5 +140,5 @@ app.post('/person', (req,res)=>
 // Can be set on windows using "set"
 const port = process.env.PORT || 3000;
 
-//Start the server (backtick ` allows you to use template string and dynamic value ${port})
+//Start the server
 app.listen(port, () => console.log(`Listening on port ${port}...`));
